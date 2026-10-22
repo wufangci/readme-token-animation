@@ -1,0 +1,197 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#fff;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const W = 1920, H = 1080;
+const ctx = document.getElementById('c').getContext('2d');
+const SERIF = '"Noto Serif CJK TC"', MONO = '"DejaVu Sans Mono"';
+let INK = '237,234,228', DIM = '140,140,140', ACC = '237,234,228', BG = '#000';
+function setTheme(light) { if (light) { INK = '20,20,20'; DIM = '150,150,150'; ACC = '20,20,20'; BG = '#fff'; } }
+let T = [], LINKS = [];
+function setData(d, links) { T = d; LINKS = links; }
+
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const seg = (t, a, b) => ease((t - a) / (b - a));
+const rnd = (i, k) => { const s = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return s - Math.floor(s); };
+const rgba = (c, a) => `rgba(${c},${a})`;
+const dec = b => { try { return new TextDecoder('utf-8', { fatal: true }).decode(Uint8Array.from(b)); } catch (e) { return null; } };
+
+// ================= timeline =================
+const GRID_IN = 2.0, DIM_A = 16.0, DIM_B = 22.0;           // flicker, then slowly darken
+const L0 = 23.0, LSTEP = 8.8, LDUR = 9.6;                    // curves: ~70 s
+let GRID_OUT, S0;
+const RATE = 6;
+
+// ================= grid =================
+const COLS = 64, GX = 80, GY = 110, GW = 1760, GH = 880;
+let ROWS, CW, CH;
+function cell(i) { const r = Math.floor(i / COLS), c = i % COLS; return { x: GX + c * CW + CW / 2, y: GY + r * CH + CH / 2 }; }
+
+// random bright/dark per token: stepped random levels, smoothly blended
+function twinkle(i, t) {
+  const rate = .8 + rnd(i, 3) * 2.2;                // each token flickers at its own pace
+  const u = t * rate + rnd(i, 4) * 10;
+  const k = Math.floor(u), f = u - k;
+  const s = f * f * (3 - 2 * f);
+  const a = rnd(i, k), b = rnd(i, k + 1);
+  let v = a + (b - a) * s;
+  v = Math.pow(v, 2.2);                            // mostly dark, occasional bright flashes
+  return v;
+}
+function drawGrid(t) {
+  const on = seg(t, GRID_IN, GRID_IN + .5) * (1 - seg(t, GRID_OUT, GRID_OUT + 3));
+  if (on <= 0) return;
+  const dimP = seg(t, DIM_A, DIM_B);               // 0 = full flicker, 1 = quiet and dark
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.font = `8px ${MONO}`;
+  for (let i = 0; i < T.length; i++) {
+    const { x, y } = cell(i);
+    const tw = twinkle(i, t);
+    const lit = .12 + .88 * tw;                    // flicker phase
+    const quiet = .10 + .06 * tw;                  // dimmed phase
+    const a = on * (lit + (quiet - lit) * dimP);
+    ctx.fillStyle = rgba(INK, a);
+    ctx.fillText(String(T[i].id), x, y);
+  }
+}
+
+// ================= curves =================
+function textOf(toks) { return toks.map(k => T[k].str || '').join('').replace(/\s+/g, ''); }
+function arc(a, b, k, prog, w, side) {
+  const dy = b.y - a.y;
+  const mx = (a.x + b.x) / 2;
+  const sgn = (mx < W / 2 ? 1 : -1) * (side ? 1 : -1);
+  const bow = sgn * Math.min(520, 140 + Math.abs(dy) * .55 + Math.abs(b.x - a.x) * .1);
+  const cx = Math.max(GX + 10, Math.min(GX + GW - 10, mx + bow)), cy = (a.y + b.y) / 2 - Math.abs(b.x - a.x) * .15;
+  ctx.beginPath();
+  const steps = 80, n = Math.max(1, Math.floor(steps * prog));
+  for (let s = 0; s <= n; s++) {
+    const u = s / steps;
+    const x = (1 - u) * (1 - u) * a.x + 2 * (1 - u) * u * cx + u * u * b.x;
+    const y = (1 - u) * (1 - u) * a.y + 2 * (1 - u) * u * cy + u * u * b.y;
+    s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = rgba(ACC, k * (.35 + .5 * w)); ctx.lineWidth = 1 + 2.4 * w; ctx.stroke();
+}
+function dot(p, a, r) { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = rgba(INK, a); ctx.fill(); }
+function label(p, s, a, big, ids) {
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const x = p.x + (big ? 20 : 12), y = p.y;
+  ctx.font = big ? `46px ${SERIF}` : `24px ${SERIF}`;
+  // keep labels inside the frame
+  const w = ctx.measureText(s).width;
+  const xx = Math.min(x, W - 60 - w);
+  ctx.fillStyle = rgba(INK, a); ctx.fillText(s, xx, y - (big ? 10 : 0));
+  if (big) { ctx.font = `18px ${MONO}`; ctx.fillStyle = rgba(DIM, a); ctx.fillText(ids, xx, y + 28); }
+}
+function drawLinks(t) {
+  LINKS.forEach((L, li) => {
+    const t0 = L0 + li * LSTEP;
+    const life = seg(t, t0, t0 + .8) * (1 - seg(t, t0 + LDUR - 1.4, t0 + LDUR));
+    if (life <= 0) return;
+    const a = cell(L.q[0]);
+    L.targets.forEach((tg, k) => {
+      const w = 1 - k * .22;
+      const prog = seg(t, t0 + .8 + k * .9, t0 + 4.2 + k * .9);
+      if (prog <= 0) return;
+      const b = cell(tg[0]);
+      arc(a, b, life, prog, w, k % 2 === 0);
+      if (prog > .97) { dot(b, life, 3 + 3 * w); label(b, textOf(tg), life * (.6 + .4 * w), false); }
+    });
+    dot(a, life, 7);
+    label(a, textOf(L.q), life, true, L.q.map(k => 'ID ' + T[k].id).join('  '));
+  });
+}
+
+// ================= speaking =================
+const MX = 360, MAXW = 1200, FS = 40, LH = 92, ANCHOR = 790, TOPCLIP = 110, BOTCLIP = 1010;
+let G = null, TEND = 0, CUR = null;
+function buildSpeak() {
+  G = []; let cur = [];
+  T.forEach((t, i) => { cur.push(i); const s = dec(cur.flatMap(k => T[k].bytes)); if (s !== null) { G.push({ toks: cur, text: s }); cur = []; } });
+  ctx.font = `${FS}px ${SERIF}`;
+  let x = 0, y = 0;
+  const newline = () => { x = 0; y += LH; };
+  G.forEach(g => {
+    g.pieces = [];
+    const segs = g.text.split('\n');
+    segs.forEach((sg, k) => {
+      if (k > 0) { if (sg === '' && k < segs.length - 1) { newline(); y -= LH * .5; } newline(); }
+      if (sg !== '') { const w = ctx.measureText(sg).width; if (x + w > MAXW && x > 0) newline(); g.pieces.push({ s: sg, x, y, w }); x += w; }
+    });
+    if (g.pieces.length === 0) { if (x + 22 > MAXW) newline(); g.pieces.push({ s: '', x, y, w: 0, mark: true }); }
+    g.ax = g.pieces[0].x; g.ay = g.pieces[0].y; g.last = g.toks[g.toks.length - 1];
+  });
+  TEND = S0 + T.length / RATE;
+  CUR = new Float32Array(T.length + 1);
+  let gi = 0;
+  for (let n = 0; n <= T.length; n++) { while (gi < G.length - 1 && G[gi].last < n) gi++; CUR[n] = G[gi].pieces[G[gi].pieces.length - 1].y; }
+}
+function scrollAt(t) { return CUR[Math.floor(clamp((t - S0) * RATE, 0, T.length))]; }
+function drawSpeak(t) {
+  const on = seg(t, S0 - .8, S0) * (1 - seg(t, TEND + 6, TEND + 9));
+  if (on <= 0) return;
+  const n = (t - S0) * RATE;
+  let sc = 0; for (let k = 0; k < 8; k++) sc += scrollAt(t - k * .09); sc /= 8;
+  const off = ANCHOR - sc;
+  ctx.save(); ctx.beginPath(); ctx.rect(0, TOPCLIP, W, BOTCLIP - TOPCLIP); ctx.clip();
+  ctx.textBaseline = 'alphabetic';
+  let head = null;
+  for (const g of G) {
+    if (g.toks[0] >= n) { if (!head) head = g; continue; }
+    const yy = g.ay + off;
+    if (yy < TOPCLIP - LH || yy > BOTCLIP + LH) continue;
+    const done = g.last < n;
+    const fresh = clamp((n - g.last) * 2.2, 0, 1);
+    const a = on * clamp((yy - TOPCLIP) / 240, 0, 1);
+    if (done) {
+      g.pieces.forEach(p => {
+        ctx.textAlign = 'left';
+        if (p.mark) { ctx.font = `20px ${MONO}`; ctx.fillStyle = rgba(DIM, a * .7 * fresh); ctx.fillText('↵', MX + p.x, p.y + off); }
+        else { ctx.font = `${FS}px ${SERIF}`; ctx.fillStyle = rgba(INK, a * fresh); ctx.fillText(p.s, MX + p.x, p.y + off); }
+      });
+      ctx.font = `11px ${MONO}`; ctx.fillStyle = rgba(DIM, a * .85 * fresh); ctx.textAlign = 'left';
+      g.toks.forEach((k, r) => ctx.fillText(String(T[k].id), MX + g.ax, g.ay + off + 24 + r * 13));
+    } else {
+      const hx = g.toks.filter(k => k < n).map(k => T[k].bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ')).join(' ');
+      ctx.font = `17px ${MONO}`; ctx.fillStyle = rgba(DIM, a); ctx.textAlign = 'left';
+      ctx.fillText(hx, MX + g.ax, g.ay + off - 10);
+    }
+  }
+  if (head && t < TEND) {
+    const alt = T[Math.floor(rnd(Math.floor(t * 9), 7) * T.length)];
+    const s = alt.str ? (alt.str.replace(/\s/g, '') || '·') : '·';
+    ctx.font = `${FS}px ${SERIF}`; ctx.fillStyle = rgba(DIM, on * .45); ctx.textAlign = 'left';
+    ctx.fillText([...s].slice(0, 2).join(''), MX + head.ax, head.ay + off);
+  }
+  ctx.restore();
+}
+
+// ================= counter (top right only) =================
+function drawCounter(t) {
+  const g = seg(t, GRID_IN, GRID_IN + .5) * (1 - seg(t, GRID_OUT, GRID_OUT + 3));
+  const s = seg(t, S0 - .8, S0) * (1 - seg(t, TEND + 6, TEND + 9));
+  ctx.font = `20px ${MONO}`; ctx.textAlign = 'right'; ctx.textBaseline = 'alphabetic';
+  if (g > 0) { ctx.fillStyle = rgba(DIM, g); ctx.fillText(`${T.length.toLocaleString()} tokens`, W - 80, 70); }
+  if (s > 0) {
+    const n = Math.min(T.length, Math.max(0, Math.floor((t - S0) * RATE)));
+    ctx.fillStyle = rgba(DIM, s); ctx.fillText(`token ${n.toLocaleString()} / ${T.length.toLocaleString()}`, W - 80, 70);
+  }
+}
+
+function init() {
+  ROWS = Math.ceil(T.length / COLS); CW = GW / COLS; CH = GH / ROWS;
+  GRID_OUT = L0 + (LINKS.length - 1) * LSTEP + LDUR + .5;
+  S0 = GRID_OUT + 4.5;
+  buildSpeak();
+}
+function totalDuration() { if (!G) init(); return TEND + 11; }
+function draw(t) {
+  if (!G) init();
+  ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
+  drawGrid(t);
+  drawLinks(t);
+  drawSpeak(t);
+  drawCounter(t);
+}
+</script></body></html>
