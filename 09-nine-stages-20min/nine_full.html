@@ -1,0 +1,421 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#fff;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c" width="1920" height="1080"></canvas>
+<script>
+const W = 1920, H = 1080;
+const ctx = document.getElementById('c').getContext('2d');
+const MONO = '"DejaVu Sans Mono"';
+const INK = '20,20,20', DIM = '150,150,150';
+const rgba = (c, a) => `rgba(${c},${a})`;
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const seg = (t, a, b) => ease((t - a) / (b - a));
+const win = (t, a, b, fi = 2, fo = 2) => seg(t, a, a + fi) * (1 - seg(t, b - fo, b));
+const rnd = (i, k) => { const s = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return s - Math.floor(s); };
+const hex = b => b.toString(16).toUpperCase().padStart(2, '0');
+const VOCAB = 199998, END = 1200;
+
+let T = [], N = 0, TT = null, SEC = [], R0 = 0, R1 = 0;
+let BYTES = [], BTOK = [], TB0 = [];          // bytes, token of each byte, first byte of each token
+let PUNCT = [];
+
+function setData(d, timing) {
+  T = d; N = T.length; TT = Float64Array.from(timing.tok_time); SEC = timing.secs; R0 = timing.R0; R1 = timing.R1;
+  T.forEach((t, i) => { TB0.push(BYTES.length); t.bytes.forEach(b => { BYTES.push(b); BTOK.push(i); }); });
+  PUNCT = T.map(t => !!(t.str && /[，。：？！「」\n]/.test(t.str)));
+}
+// number of tokens already read at time t
+function cursor(t) { let lo = 0, hi = N; while (lo < hi) { const m = (lo + hi) >> 1; if (TT[m] <= t) lo = m + 1; else hi = m; } return lo; }
+const secT = k => k < SEC.length - 1 ? TT[SEC[k]] : R1;
+
+// ---------------- stage boundaries (seconds) ----------------
+let ST = {};
+function stages() {
+  const s = k => secT(k);
+  ST = {
+    bytes: [0, s(1) + 1],
+    split: [s(1) - 1, s(2) + 2],
+    vec: [s(2) - 1, s(3) + 3],
+    att: [s(3) - 1, s(5) + 6],
+    lines: [s(4) - 2, s(5) + 6],
+    cache: [s(5) - 1, R1 + 16],
+    prob: [s(5) + 26, R1 + 12],
+    out: [s(5) + 56, R1 + 12],
+    forget: [R1 + 1, END],
+  };
+}
+function stageIndex(t) {
+  if (t < secT(1)) return 1;
+  if (t < (secT(1) + secT(2)) / 2) return 2;
+  if (t < secT(2)) return 3;
+  if (t < secT(3)) return 4;
+  if (t < secT(5)) return 5;
+  if (t < ST.prob[0]) return 6;
+  if (t < ST.out[0]) return 7;
+  if (t < R1 + 1) return 8;
+  return 9;
+}
+
+// ---------------- 01–03: byte window following the voice ----------------
+const BX = 80, BY = 110, BC = 64, BCW = 27.5, BRH = 19.5, BROWS = 44;
+function drawByteWindow(t, secIdx, on, mode) {
+  // mode 0: bytes only; mode 1: bytes -> boxes -> ids
+  const b0 = TB0[SEC[secIdx]], b1 = TB0[SEC[secIdx + 1]] || BYTES.length;
+  const c = cursor(t);
+  const cb = c >= N ? BYTES.length : TB0[c];                 // bytes read so far
+  const readB = clamp(cb - b0, 0, b1 - b0);
+  // scroll so the newest bytes stay a few rows above the bottom (smooth)
+  const scrollRows = Math.max(0, (readB - (BROWS - 4) * BC) / BC);
+  ctx.save(); ctx.beginPath(); ctx.rect(0, BY - 4, W, BROWS * BRH + 6); ctx.clip();
+  ctx.textBaseline = 'middle';
+  const first = Math.max(0, Math.floor(scrollRows) - 1) * BC;
+  const mid = (secT(secIdx) + secT(secIdx + 1)) / 2;
+  for (let k = first; k < readB; k++) {
+    const r = Math.floor(k / BC) - scrollRows, cc = k % BC;
+    const y = BY + r * BRH;
+    if (y < BY - BRH || y > BY + BROWS * BRH) continue;
+    const ti = BTOK[b0 + k];
+    const age = t - TT[ti];
+    const fresh = clamp(age / .25, 0, 1);
+    const x = BX + cc * BCW;
+    let hexA = 1, boxA = 0, idA = 0;
+    if (mode === 1) {
+      boxA = clamp((age - .8) / .6, 0, 1);
+      const idT = Math.max(TT[ti] + 2.6, mid + (TT[ti] - secT(secIdx)) * .02);
+      idA = clamp((t - idT) / .8, 0, 1);
+      hexA = 1 - idA;
+    }
+    ctx.font = `11px ${MONO}`; ctx.textAlign = 'left';
+    ctx.fillStyle = rgba(INK, on * fresh * hexA * .85);
+    ctx.fillText(hex(BYTES[b0 + k]), x + 4, y + BRH / 2);
+    // token box: drawn once per token row-segment, at its first byte on that row
+    const isStart = (b0 + k === TB0[ti]) || cc === 0;
+    if (boxA > 0 && isStart) {
+      let e = b0 + k; while (e < BYTES.length && BTOK[e] === ti && (e - b0) % BC !== 0 || e === b0 + k) e++;
+      const segLen = Math.min(e - (b0 + k), BC - cc);
+      ctx.strokeStyle = rgba(INK, on * boxA * .45); ctx.lineWidth = 1;
+      ctx.strokeRect(x + 1, y + 1.5, segLen * BCW - 2, BRH - 3);
+      if (ti % 2 === 0) { ctx.fillStyle = rgba(INK, on * boxA * .05); ctx.fillRect(x + 1, y + 1.5, segLen * BCW - 2, BRH - 3); }
+      if (idA > 0 && b0 + k === TB0[ti]) {
+        ctx.font = `9px ${MONO}`; ctx.textAlign = 'center';
+        ctx.fillStyle = rgba(INK, on * idA);
+        ctx.fillText(String(T[ti].id), x + segLen * BCW / 2, y + BRH / 2);
+      }
+    }
+  }
+  ctx.restore();
+}
+function drawBytesStage(t) {
+  const on1 = win(t, 0.5, secT(1) + 1, 1.5, 2.5);
+  if (on1 > 0) drawByteWindow(t, 0, on1, 0);
+  const on2 = win(t, secT(1) - .5, secT(2) - 2.5, 2.5, 3);
+  if (on2 > 0) drawByteWindow(t, 1, on2, 1);
+}
+
+// ---------------- 03→04: zoom out to every id read so far ----------------
+const GX = 80, GY = 110, GW = 1760, GH = 860, GC = 64;
+let GCW, GRH;
+function gpos(i) { return { x: GX + (i % GC) * GCW + GCW / 2, y: GY + Math.floor(i / GC) * GRH + GRH / 2 }; }
+function drawIdGrid(t) {
+  const on = win(t, secT(2) - 3.5, secT(2) + 9, 2.5, 3);
+  if (on <= 0) return;
+  const c = cursor(t);
+  ctx.font = `8px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < c; i++) {
+    const p = gpos(i);
+    const tw = Math.pow(rnd(i, Math.floor(t * (1 + rnd(i, 3) * 2) + rnd(i, 4) * 9)), 2);
+    ctx.fillStyle = rgba(INK, on * (.15 + .7 * tw));
+    ctx.fillText(String(T[i].id), p.x, p.y);
+  }
+}
+
+// ---------------- matrices ----------------
+const MW = 1760, MH = 300, AS = 600, NL = 8;
+let EMB = [], ATT = [], CACHE = null, WEIGHTS = null;
+function gauss(a, b) { return Math.sqrt(-2 * Math.log(a + 1e-9)) * Math.cos(6.2831853 * b); }
+function makeEmb(layer) {
+  const cv = document.createElement('canvas'); cv.width = MW; cv.height = MH;
+  const c = cv.getContext('2d'), im = c.createImageData(MW, MH);
+  for (let x = 0; x < MW; x++) {
+    const ti = Math.floor(x * N / MW), id = T[ti].id;
+    for (let y = 0; y < MH; y++) {
+      let v = gauss(rnd(id, y * 3 + 1), rnd(id, y * 3 + 2)) * .5;   // same id -> same column
+      v += .25 * Math.sin(ti / Math.pow(40, (y % 64) / 64) + y);      // position
+      if (layer > 0) v = v * (1 - layer * .08) + gauss(rnd(ti * 7 + layer, y), rnd(ti * 5 + layer, y + 9)) * layer * .06 + .35 * Math.sin(ti / 180 + y * .3 + layer);
+      const g = clamp(.5 + v * .35, 0, 1), o = (y * MW + x) * 4, val = Math.round(255 - g * 200);
+      im.data[o] = im.data[o + 1] = im.data[o + 2] = val; im.data[o + 3] = 255;
+    }
+  }
+  c.putImageData(im, 0, 0); return cv;
+}
+function makeAtt(layer) {
+  const cv = document.createElement('canvas'); cv.width = AS; cv.height = AS;
+  const c = cv.getContext('2d'), im = c.createImageData(AS, AS);
+  const band = [3, 12, 40, 6, 120, 20, 2, 60][layer], sink = [.9, .5, .8, .3, .95, .6, .7, .85][layer], pun = [.2, .6, .1, .8, .3, .5, .15, .4][layer];
+  for (let r = 0; r < AS; r++) {
+    const i = Math.floor((r + .5) * N / AS);
+    for (let cc = 0; cc < AS; cc++) {
+      const o = (r * AS + cc) * 4;
+      if (cc > r) { im.data[o] = im.data[o + 1] = im.data[o + 2] = 255; im.data[o + 3] = 0; continue; }   // cannot look forward
+      const j = Math.floor((cc + .5) * N / AS);
+      let v = Math.exp(-(i - j) / (band * N / AS / 2));
+      if (cc < 6) v = Math.max(v, sink * (1 - cc / 8));
+      if (PUNCT[j] && rnd(j, layer + 20) < .55) v = Math.max(v, pun * (.55 + .45 * rnd(j, layer)) * (.6 + .4 * rnd(r >> 3, j)));
+      v = Math.max(v, .22 * Math.pow(rnd(r * 1000 + cc, layer), 3) + .05);
+      const val = Math.round(255 - clamp(v, 0, 1) * 215);
+      im.data[o] = im.data[o + 1] = im.data[o + 2] = val; im.data[o + 3] = 255;
+    }
+  }
+  c.putImageData(im, 0, 0); return cv;
+}
+function makeStatic(w, h, seed, contrast) {
+  const cv = document.createElement('canvas'); cv.width = w; cv.height = h;
+  const c = cv.getContext('2d'), im = c.createImageData(w, h);
+  for (let k = 0; k < w * h; k++) { const v = Math.round(255 - rnd(k, seed) * contrast); im.data[k * 4] = im.data[k * 4 + 1] = im.data[k * 4 + 2] = v; im.data[k * 4 + 3] = 255; }
+  c.putImageData(im, 0, 0); return cv;
+}
+
+// ---------------- 04: vectors, a column per token as it is read ----------------
+function layerAt(t) {
+  if (t < secT(3)) return 0;
+  return Math.min(NL - 1, Math.floor((t - secT(3)) / ((secT(4) - secT(3)) / NL)));
+}
+function drawVectors(t) {
+  const on = win(t, ST.vec[0], secT(4) + 2, 2.5, 3);
+  if (on <= 0) return;
+  const up = seg(t, secT(3) - 1, secT(3) + 2);
+  const y = 300 * (1 - up) + 110 * up, h = MH * (1 + .4 * (1 - up)) * (1 - up * .55);
+  const c = cursor(t), cx = Math.min(MW, c / N * MW);
+  const L = layerAt(t);
+  ctx.globalAlpha = on;
+  ctx.drawImage(EMB[L], 0, 0, cx, MH, 80, y, cx, h);
+  ctx.globalAlpha = 1;
+  if (t < secT(3) && c < N) {   // reading head
+    ctx.fillStyle = rgba(INK, on); ctx.fillRect(80 + cx, y - 10, 1.5, h + 20);
+    ctx.font = `14px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+    ctx.fillText(String(T[Math.min(c, N - 1)].id), 80 + cx, y - 18);
+  }
+}
+
+// ---------------- 05: attention grows downward with the voice ----------------
+const TL = { x: 80, y: 330, w: 300, h: 240 };
+function attRect(t) {
+  const m = seg(t, secT(4) - 2, secT(4) + 2);
+  const x0 = (W - AS) / 2, y0 = 300, w0 = AS, h0 = AS * .8;
+  return { x: x0 + (TL.x - x0) * m, y: y0 + (TL.y - y0) * m, w: w0 + (TL.w - w0) * m, h: h0 + (TL.h - h0) * m };
+}
+function drawAttention(t) {
+  const on = win(t, ST.att[0], secT(5) + 10, 2.5, 3);
+  if (on <= 0) return;
+  const R = attRect(t);
+  const c = cursor(t);
+  const grow = seg(t, secT(3) - 1, secT(3) + 4);              // rows already read appear first
+  const rows = Math.max(1, Math.floor(AS * Math.min(c / N, 1) * grow));
+  const fold = seg(t, secT(5) + 2, secT(5) + 9);
+  const L = layerAt(t);
+  if (fold <= 0) {
+    ctx.globalAlpha = on;
+    ctx.drawImage(ATT[L], 0, 0, AS, rows, R.x, R.y, R.w, R.h * rows / AS);
+    ctx.globalAlpha = 1;
+    if (c < N && t < secT(4)) { ctx.fillStyle = rgba(INK, on * .9); ctx.fillRect(R.x, R.y + R.h * rows / AS, R.w * rows / AS, 1.5); }
+  } else {
+    for (let l = 0; l < NL; l++) {
+      const tx = 80 + l * 26, w = R.w * (1 - fold) + 18 * fold, x = R.x * (1 - fold) + tx * fold;
+      const y = R.y * (1 - fold) + 300 * fold, h = R.h * (1 - fold) + AS * .8 * fold;
+      ctx.globalAlpha = on * (fold < 1 ? 1 / (1 + l * fold) : 1);
+      ctx.drawImage(ATT[l], 0, 0, AS, rows, x, y, w, h * rows / AS);
+    }
+    ctx.globalAlpha = 1;
+  }
+}
+
+// ---------------- 05 (second half): points become lines ----------------
+const RX = 470, RY = 110, RW = 1370, RH = 860, RC = 56;
+let RCW, RRH, PAIRS = [];
+function rpos(i) { return { x: RX + (i % RC) * RCW + RCW / 2, y: RY + Math.floor(i / RC) * RRH + RRH / 2 }; }
+function buildPairs() {
+  const punct = []; PUNCT.forEach((p, j) => { if (p) punct.push(j); });
+  const A = secT(4) + 4, B = secT(5) - 4, M = 4200;
+  for (let k = 0; k < M; k++) {
+    const st = A + (B - A) * Math.pow(k / M, 1 / 2.2);
+    const cmax = Math.max(14, cursor(st));                   // only what has been read can be related
+    const i = Math.floor(rnd(k, 41) * (cmax - 12)) + 12;
+    const r = rnd(k, 42); let j;
+    if (r < .45) j = Math.max(0, i - 1 - Math.floor(rnd(k, 43) * RC * 2));
+    else if (r < .72) { let lo = 0, hi = punct.length; while (lo < hi) { const m = (lo + hi) >> 1; if (punct[m] < i) lo = m + 1; else hi = m; } j = lo ? punct[Math.floor(rnd(k, 44) * lo)] : 0; }
+    else if (r < .85) j = Math.floor(rnd(k, 45) * 3);
+    else j = Math.floor(rnd(k, 46) * i);
+    PAIRS.push({ i, j, st, w: k < 60 ? .85 : .3 + .7 * Math.pow(rnd(k, 47), 3), side: rnd(k, 48) < .5 });
+  }
+}
+function drawRelGrid(t) {
+  const on = win(t, secT(4) - 1, secT(5) + 8, 3, 3);
+  if (on <= 0) return;
+  const c = cursor(t);
+  ctx.font = `7px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  for (let i = 0; i < c; i++) { const p = rpos(i); ctx.fillStyle = rgba(INK, on * (.1 + .08 * rnd(i, 8))); ctx.fillText(String(T[i].id), p.x, p.y); }
+}
+function curve(a, b, side, prog) {
+  const mx = (a.x + b.x) / 2, dy = b.y - a.y;
+  const bow = (side ? 1 : -1) * Math.min(240, 30 + Math.abs(dy) * .35);
+  const cx = Math.max(RX, Math.min(RX + RW, mx + bow)), cy = (a.y + b.y) / 2;
+  ctx.beginPath(); ctx.moveTo(a.x, a.y);
+  if (prog >= 1) ctx.quadraticCurveTo(cx, cy, b.x, b.y);
+  else { const st = 24, n = Math.max(1, Math.ceil(st * prog)); for (let q = 1; q <= n; q++) { const u = Math.min(prog, q / st); ctx.lineTo((1 - u) * (1 - u) * a.x + 2 * (1 - u) * u * cx + u * u * b.x, (1 - u) * (1 - u) * a.y + 2 * (1 - u) * u * cy + u * u * b.y); } }
+  ctx.stroke();
+}
+function drawLines(t) {
+  const on = win(t, secT(4) + 3, secT(5) + 8, .5, 4);
+  if (on <= 0) return;
+  const R = attRect(t);
+  ctx.lineWidth = 1;
+  for (let k = 0; k < PAIRS.length; k++) {
+    const P = PAIRS[k];
+    if (t < P.st) break;                                      // pairs are sorted by start time
+    const fly = clamp((t - P.st) / .8, 0, 1), grow = ease((t - P.st - .6) / 1.8);
+    const a = rpos(P.i), b = rpos(P.j);
+    if (fly < 1) {
+      const src = { x: R.x + (P.j + .5) / N * R.w, y: R.y + (P.i + .5) / N * R.h }, e = ease(fly), sz = k < 60 ? 4 : 2.6;
+      if (fly < .35) { ctx.strokeStyle = rgba(INK, on * (1 - fly / .35) * .8); ctx.strokeRect(src.x - 4, src.y - 4, 8, 8); }
+      ctx.fillStyle = rgba(INK, on * (k < 60 ? .95 : .55));
+      ctx.fillRect(src.x + (a.x - src.x) * e - sz / 2, src.y + (a.y - src.y) * e - sz / 2, sz, sz);
+    }
+    if (grow > 0) {
+      const head = 1 + .8 * (1 - clamp((t - P.st - .6) / 2.4, 0, 1));
+      ctx.strokeStyle = rgba(INK, on * P.w * .2 * head * (k < 60 ? 2.2 : 1));
+      curve(a, b, P.side, grow);
+    }
+  }
+}
+
+// ---------------- 06: cache, growing as the voice goes on ----------------
+function drawCache(t) {
+  const on = win(t, secT(5) + 7, R1 + 16, 2, .2);
+  if (on <= 0) return;
+  const erase = seg(t, R1 + 2, R1 + 10);
+  const c = cursor(t), full = AS * .8 * c / N;
+  for (let l = 0; l < NL; l++) {
+    const x = 80 + l * 26, keep = clamp(1 - erase * 1.3 + l * .04, 0, 1);
+    if (keep <= 0) continue;
+    ctx.globalAlpha = on;
+    ctx.drawImage(CACHE, 0, 0, 18, 600 * c / N * keep, x, 300, 18, full * keep);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---------------- 07–08: next-token distribution, output in step with the voice ----------------
+const PX = 80, PW = 1760, PY = 900, PH = 300;
+function drawProb(t) {
+  const on = win(t, ST.prob[0], ST.prob[1], 3, 3);
+  if (on <= 0) return;
+  const c = Math.min(cursor(t), N - 1);
+  const since = t - TT[c - 1 >= 0 ? c - 1 : 0];
+  const phase = clamp(since / .25, 0, 1);
+  const conf = .45 + .45 * rnd(c, 9);
+  ctx.strokeStyle = rgba(DIM, on * .6); ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.moveTo(PX, PY); ctx.lineTo(PX + PW, PY); ctx.stroke();
+  ctx.strokeStyle = rgba(INK, on * .5); ctx.beginPath();
+  for (let x = 0; x < PW; x++) { const h = 1 + 5 * Math.pow(rnd(x + c * 7, 3), 6); ctx.moveTo(PX + x + .5, PY); ctx.lineTo(PX + x + .5, PY - h); }
+  ctx.stroke();
+  for (let k = 0; k < 4; k++) {
+    const id = Math.floor(rnd(c * 31 + k, 5) * VOCAB), x = PX + id / VOCAB * PW, h = PH * (1 - conf) * (.5 - k * .1) * phase;
+    ctx.fillStyle = rgba(INK, on * .45); ctx.fillRect(x, PY - h, 2, h);
+  }
+  const id = T[c].id, x = PX + id / VOCAB * PW, h = PH * conf * phase;
+  ctx.fillStyle = rgba(INK, on); ctx.fillRect(x - 1, PY - h, 3, h);
+  ctx.font = `14px ${MONO}`; ctx.textAlign = 'center'; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(String(id), x, PY - h - 10);
+  ctx.font = `12px ${MONO}`; ctx.fillStyle = rgba(DIM, on);
+  ctx.textAlign = 'left'; ctx.fillText('0', PX, PY + 22); ctx.textAlign = 'right'; ctx.fillText(String(VOCAB - 1), PX + PW, PY + 22);
+}
+let OUT0 = 0;
+const OX = 400, OY = 160, OW = 1440, OLH = 46, OVIS = 12;
+let OPOS = null;
+function layoutOut() {
+  OUT0 = cursor(ST.out[0]);
+  OPOS = [];
+  ctx.font = `26px ${MONO}`;
+  let x = 0, line = 0;
+  for (let k = OUT0; k < N; k++) {
+    const w = ctx.measureText(String(T[k].id) + ' ').width;
+    if (x + w > OW) { x = 0; line++; }
+    OPOS[k] = { x, line }; x += w;
+  }
+}
+function drawOutput(t) {
+  const on = win(t, ST.out[0], R1 + 12, 1, 4);
+  if (on <= 0) return;
+  const c = cursor(t);
+  if (c <= OUT0) return;
+  const lastLine = OPOS[c - 1].line;
+  // smooth scroll: keep the writing line at the bottom of the visible block
+  let sc = 0; for (let q = 0; q < 6; q++) { const cq = Math.max(OUT0 + 1, cursor(t - q * .12)); sc += Math.max(0, OPOS[cq - 1].line - (OVIS - 1)); } sc /= 6;
+  ctx.save(); ctx.beginPath(); ctx.rect(OX, OY - 40, OW + 40, OVIS * OLH + 20); ctx.clip();
+  ctx.font = `26px ${MONO}`; ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  const firstLine = Math.max(0, Math.floor(sc) - 1);
+  for (let k = OUT0; k < c; k++) {
+    const P = OPOS[k]; if (P.line < firstLine) continue;
+    const y = OY + (P.line - sc) * OLH;
+    const fade = clamp((y - OY + 40) / 90, 0, 1);
+    const fresh = clamp((t - TT[k]) / .3, 0, 1);
+    ctx.fillStyle = rgba(INK, on * fresh * fade);
+    ctx.fillText(String(T[k].id), OX + P.x, y);
+  }
+  ctx.restore();
+}
+
+// ---------------- weights: there from the start, never changed ----------------
+function drawWeights(t) {
+  ctx.globalAlpha = seg(t, .2, 1.5) * (1 - seg(t, END - 2.5, END - .5)) * .55;
+  ctx.drawImage(WEIGHTS, 80, 1010, 1760, 24);
+  ctx.globalAlpha = 1;
+}
+
+// ---------------- counters ----------------
+function counter(t) {
+  const c = cursor(t), si = stageIndex(t);
+  let s = '';
+  if (si === 1) s = `${(c >= N ? BYTES.length : TB0[c]).toLocaleString()} bytes`;
+  else if (si === 2 || si === 3) s = `${c.toLocaleString()} tokens`;
+  else if (si === 4) s = `${c.toLocaleString()} × d`;
+  else if (si === 5) s = t < secT(4) ? `layer ${layerAt(t) + 1}` : `i → j  ${PAIRS.filter(P => t >= P.st).length.toLocaleString()}`;
+  else if (si === 6) s = `cache ${c.toLocaleString()}`;
+  else if (si === 7) s = `p( · )  ${VOCAB.toLocaleString()}`;
+  else if (si === 8) s = `output ${Math.max(0, c - OUT0).toLocaleString()}`;
+  else s = 'Δ weights = 0';
+  const a = seg(t, .3, 1.2) * (1 - seg(t, END - 3, END - 1));
+  ctx.font = `20px ${MONO}`; ctx.textBaseline = 'alphabetic';
+  ctx.fillStyle = rgba(DIM, a);
+  ctx.textAlign = 'right'; ctx.fillText(s, W - 80, 70);
+  ctx.textAlign = 'left'; ctx.fillText(String(si).padStart(2, '0'), 80, 70);
+}
+
+let READY = false;
+function init() {
+  stages();
+  GCW = GW / GC; GRH = GH / Math.ceil(N / GC);
+  RCW = RW / RC; RRH = RH / Math.ceil(N / RC);
+  for (let l = 0; l < NL; l++) { EMB.push(makeEmb(l)); ATT.push(makeAtt(l)); }
+  CACHE = makeStatic(18, 600, 77, 170);
+  WEIGHTS = makeStatic(1760, 24, 5, 120);
+  buildPairs(); PAIRS.sort((a, b) => a.st - b.st);
+  layoutOut();
+  READY = true;
+}
+function draw(t) {
+  if (!READY) init();
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  drawBytesStage(t);
+  drawIdGrid(t);
+  drawVectors(t);
+  drawRelGrid(t);
+  drawLines(t);
+  drawAttention(t);
+  drawCache(t);
+  drawOutput(t);
+  drawProb(t);
+  drawWeights(t);
+  counter(t);
+}
+function totalDuration() { return END; }
+</script></body></html>
