@@ -1,0 +1,148 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W = 1080, H = 1920;
+const ctx = document.getElementById('c').getContext('2d');
+const SERIF = '"Noto Serif CJK TC"', MONO = '"DejaVu Sans Mono"';
+let INK = '237,234,228', DIM = '150,150,150', LINE = '120,120,120', BG = '#000';
+function setTheme(light) { if (light) { INK = '20,20,20'; DIM = '150,150,150'; LINE = '175,175,175'; BG = '#fff'; } }
+let DATA = null;
+function setData(d) { DATA = d; }
+
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const seg = (t, a, b) => ease((t - a) / (b - a));
+// tiny deterministic noise for the shatter
+const rnd = (i, k) => { const s = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return s - Math.floor(s); };
+
+function measure(text, font) { ctx.font = font; return ctx.measureText(text).width; }
+
+// build layout for one row of groups
+function layoutRow(groups, size) {
+  const textFont = `${size}px ${SERIF}`, hexFont = `${Math.round(size * .40)}px ${MONO}`, idFont = `${Math.round(size * .38)}px ${MONO}`;
+  const pad = size * .22, gap = size * .16;
+  const G = groups.map(g => {
+    const wholeW = measure(g.text, textFont);
+    const toks = g.toks.map(t => {
+      const lw = t.frag ? measure(t.label, hexFont) : measure(t.label.replace(/ /g, '␣'), textFont);
+      const iw = measure(String(t.id), `${Math.round(size * .58)}px ${MONO}`) + size * .12;
+      return { ...t, w: Math.max(lw, iw) + pad * 2 };
+    });
+    const splitW = toks.reduce((a, t) => a + t.w, 0) + gap * (toks.length - 1);
+    return { ...g, wholeW, splitW, toks };
+  });
+  return { G, size, textFont, hexFont, idFont, gap };
+}
+
+function drawRow(L, cy, p, q, r, shatterSeed) {
+  // p: split progress, q: id reveal, r: text fade to numbers
+  const { G, size, textFont, hexFont, idFont, gap } = L;
+  const between = gap * 1.6 * p;
+  const widths = G.map(g => g.wholeW + (g.splitW - g.wholeW) * p);
+  const total = widths.reduce((a, b) => a + b, 0) + between * (G.length - 1);
+  let x = (W - total) / 2;
+  const idY = cy + size * .95, idUp = cy + size * .12;
+  G.forEach((g, gi) => {
+    const gw = widths[gi];
+    const isFrag = g.toks.some(t => t.frag);
+    // whole glyph (fades during split only for fragment groups; for others it simply becomes the token text)
+    if (isFrag) {
+      const a = (1 - p) * (1 - r);
+      if (a > 0.01) {
+        ctx.save();
+        ctx.font = textFont; ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+        const jx = (rnd(gi, shatterSeed) - .5) * 26 * p, jy = (rnd(gi, shatterSeed + 1) - .5) * 26 * p;
+        ctx.fillStyle = `rgba(${INK},${a})`;
+        ctx.fillText(g.text, x + gw / 2 + jx, cy + jy);
+        ctx.restore();
+      }
+    }
+    // token boxes
+    let tx = x + (gw - (g.splitW)) / 2 * (1 - p); // keep centered while expanding
+    const scale = (g.splitW > 0) ? (gw / g.splitW) : 1;
+    let cx = x;
+    g.toks.forEach((t, ti) => {
+      const tw = t.w * (g.wholeW / g.splitW + (1 - g.wholeW / g.splitW) * p);
+      const mid = cx + tw / 2;
+      // border
+      const ba = p * (1 - r) * .55;
+      if (ba > 0.01) {
+        ctx.strokeStyle = `rgba(${LINE},${ba})`; ctx.lineWidth = 1.5;
+        ctx.strokeRect(cx, cy - size * .62, tw, size * 1.24);
+      }
+      // label
+      ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+      if (t.frag) {
+        const a = p * (1 - r);
+        if (a > 0.01) {
+          ctx.font = hexFont; ctx.fillStyle = `rgba(${DIM},${a})`;
+          const jy = (rnd(gi * 7 + ti, shatterSeed + 3) - .5) * 30 * (1 - p);
+          ctx.fillText(t.label, mid, cy + jy);
+        }
+      } else if (!isFrag) {
+        const a = 1 - r;
+        if (a > 0.01) {
+          ctx.font = textFont; ctx.fillStyle = `rgba(${INK},${a})`;
+          const lab = p > .5 ? t.label.replace(/ /g, '␣') : t.label;
+          ctx.fillText(lab, mid, cy);
+        }
+      }
+      // id
+      const ia = q;
+      if (ia > 0.01) {
+        const y = idY + (idUp - idY) * r;
+        ctx.font = `${Math.round(size * (.38 + .2 * r))}px ${MONO}`;
+        const d = DIM.split(',').map(Number), k = INK.split(',').map(Number);
+        ctx.fillStyle = `rgba(${d.map((v, j) => Math.round(v + (k[j] - v) * r)).join(',')},${ia})`;
+        ctx.fillText(String(t.id), mid, y);
+      }
+      cx += tw + gap * p;
+    });
+    x += gw + between;
+  });
+}
+
+let SA, SN;
+function splitTotal(L) { return L.G.reduce((a, g) => a + g.splitW, 0) + L.gap * 1.6 * (L.G.length - 1); }
+function fit(rowsData, start, maxW) {
+  let size = start;
+  while (size > 20) {
+    const Ls = rowsData.map(d => layoutRow(d, size));
+    if (Math.max(...Ls.map(splitTotal)) <= maxW) return Ls;
+    size -= 1;
+  }
+  return rowsData.map(d => layoutRow(d, size));
+}
+function build() {
+  SA = fit(DATA.sceneA, 96, 940);
+  SN = fit(DATA.sceneN, 110, 940);
+}
+function drawScene(rows, p, q, r, seed, groupGap) {
+  const size = rows[0].size, step = size * (rows.length > 4 ? 2.1 : 2.5);
+  const total = step * (rows.length - 1) + groupGap * (rows.length > 2 ? 1 : 0);
+  let y = H / 2 - total / 2;
+  rows.forEach((L, i) => {
+    drawRow(L, y, p, q, r, seed + i * 3);
+    y += step + ((DATA.breakAfter || []).includes(i) && rows === SA ? groupGap : 0);
+  });
+}
+function draw(t) {
+  if (!SA) build();
+  ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
+  if (t < 18.6) {
+    const fadeIn = seg(t, 1.0, 3.6), p = seg(t, 6.0, 8.6), q = seg(t, 8.8, 11.2), r = seg(t, 13.6, 16.2);
+    const out = 1 - seg(t, 17.4, 18.5);
+    ctx.save(); ctx.globalAlpha = fadeIn * out;
+    drawScene(SA, p, q, r, 1, SA[0].size * 1.2);
+    ctx.restore();
+  }
+  if (t >= 19.0) {
+    const fadeIn = seg(t, 19.2, 21.0), p = seg(t, 22.4, 24.6), q = seg(t, 24.6, 26.0), r = seg(t, 26.4, 28.2);
+    const out = 1 - seg(t, 29.0, 30.0);
+    ctx.save(); ctx.globalAlpha = fadeIn * out;
+    drawScene(SN, p, q, r, 9, 0);
+    ctx.restore();
+  }
+}
+</script></body></html>
