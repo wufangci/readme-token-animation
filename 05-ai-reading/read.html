@@ -1,0 +1,163 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#000;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W = 1080, H = 1920;
+const ctx = document.getElementById('c').getContext('2d');
+const SERIF = '"Noto Serif CJK TC"', MONO = '"DejaVu Sans Mono"', SANS = '"Noto Sans CJK TC"';
+let INK = '237,234,228', DIM = '140,140,140', ACC = '237,234,228', BG = '#000';
+function setTheme(light) { if (light) { INK = '20,20,20'; DIM = '150,150,150'; ACC = '20,20,20'; BG = '#fff'; } }
+let T = [];
+function setData(d) { T = d; }
+
+const clamp = (x, a = 0, b = 1) => Math.max(a, Math.min(b, x));
+const ease = x => { x = clamp(x); return x < .5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2; };
+const seg = (t, a, b) => ease((t - a) / (b - a));
+const rnd = (i, k) => { const s = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return s - Math.floor(s); };
+const rgba = (c, a) => `rgba(${c},${a})`;
+
+// ---------- grid of all tokens ----------
+const COLS = 36, GX = 60, GY = 230, GW = 960, GH = 1480;
+let ROWS, CW, CH;
+function cell(i) { const r = Math.floor(i / COLS), c = i % COLS; return { x: GX + c * CW + CW / 2, y: GY + r * CH + CH / 2 }; }
+function label(t) {
+  if (t.str === null) return t.bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+  return t.str.replace(/\n/g, '↵').replace(/ /g, '␣');
+}
+
+// illustrative attention: query token -> [target index, weight]
+const Q = [
+  { q: 5331, t0: 7.0, show: [17, 152, 150, 5324], targets: [[146, 1], [152, .8], [17, .7], [18, .7], [144, .9], [145, .9], [148, .6], [150, .55], [5324, .5]] },
+  { q: 4618, t0: 13.6, show: [3958, 3950, 4614], targets: [[3958, 1], [3959, .8], [3950, .6], [3951, .6], [4614, .75], [4616, .5], [4617, .5]] },
+];
+
+function drawGrid(t, alpha) {
+  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
+  ctx.font = `8px ${MONO}`;
+  for (let i = 0; i < T.length; i++) {
+    const { x, y } = cell(i);
+    const sh = .32 + .22 * (0.5 + 0.5 * Math.sin(t * 1.3 + rnd(i, 2) * 6.28));
+    ctx.fillStyle = rgba(DIM, alpha * sh);
+    ctx.fillText(String(T[i].id), x, y);
+  }
+}
+
+function arc(a, b, k, prog, w, side) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const mx = (a.x + b.x) / 2;
+  const sgn = mx < W / 2 ? 1 : -1;
+  const bow = sgn * Math.min(360, 80 + Math.abs(dy) * .28) * (side ? 1 : .55);
+  const cx = Math.max(GX + 10, Math.min(GX + GW - 10, mx + bow)), cy = (a.y + b.y) / 2;
+  // draw the curve up to prog
+  ctx.beginPath();
+  const steps = 60, n = Math.max(1, Math.floor(steps * prog));
+  for (let s = 0; s <= n; s++) {
+    const u = s / steps;
+    const x = (1 - u) * (1 - u) * a.x + 2 * (1 - u) * u * cx + u * u * b.x;
+    const y = (1 - u) * (1 - u) * a.y + 2 * (1 - u) * u * cy + u * u * b.y;
+    s === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.strokeStyle = rgba(ACC, k * (.25 + .55 * w)); ctx.lineWidth = 0.8 + 2.6 * w; ctx.stroke();
+}
+
+function tag(t, p, a, big) {
+  ctx.textAlign = 'left'; ctx.textBaseline = 'middle';
+  const s = label(t);
+  ctx.font = big ? `52px ${SERIF}` : `24px ${SERIF}`;
+  if (t.str === null) ctx.font = big ? `30px ${MONO}` : `16px ${MONO}`;
+  const x = p.x + (big ? 22 : 10), y = p.y;
+  ctx.fillStyle = rgba(INK, a); ctx.fillText(s, x, y - (big ? 10 : 0));
+  if (big) { ctx.font = `20px ${MONO}`; ctx.fillStyle = rgba(DIM, a); ctx.fillText(`ID ${t.id}`, x, y + 32); }
+}
+
+function dot(p, a, r) { ctx.beginPath(); ctx.arc(p.x, p.y, r, 0, Math.PI * 2); ctx.fillStyle = rgba(INK, a); ctx.fill(); }
+
+function stageRead(t) {
+  const on = seg(t, 2.0, 2.6) * (1 - seg(t, 20.0, 22.0));
+  if (on <= 0) return;
+  drawGrid(t, on);
+  Q.forEach((q, qi) => {
+    const life = seg(t, q.t0, q.t0 + .6) * (1 - seg(t, q.t0 + 5.6, q.t0 + 6.4));
+    if (life <= 0) return;
+    const a = cell(q.q);
+    q.targets.forEach(([ti, w], k) => {
+      const prog = seg(t, q.t0 + .5 + k * .18, q.t0 + 2.2 + k * .18);
+      if (prog <= 0) return;
+      const b = cell(ti);
+      arc(a, b, life * on, prog, w, qi === 0 ? (k % 2 === 0) : (k % 2 === 1));
+      if (prog > .95) {
+        dot(b, life * on, 2.5 + 3 * w);
+        if (q.show.includes(ti)) tag(T[ti], b, life * on * (.55 + .45 * w), false);
+      }
+    });
+    dot(a, life * on, 7);
+    tag(T[q.q], a, life * on, true);
+  });
+  // caption
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `30px ${SANS}`; ctx.fillStyle = rgba(INK, on * .9); ctx.fillText('同時讀取', GX, 150);
+  ctx.font = `22px ${MONO}`; ctx.fillStyle = rgba(DIM, on); ctx.textAlign = 'right';
+  ctx.fillText(`${T.length.toLocaleString()} tokens · 1 step`, GX + GW, 150);
+}
+
+// ---------- speaking: one token at a time ----------
+const SPEAK = [14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26]; // 親愛的人工智慧：↵↵今天是十月四日。
+const S0 = 23.5, STEP = 1.05;
+function stageSpeak(t) {
+  const on = seg(t, S0 - .6, S0) * (1 - seg(t, 41.5, 43.5));
+  if (on <= 0) return;
+  const size = 92;
+  ctx.textBaseline = 'middle';
+  // layout two lines
+  const lines = [[], []]; let li = 0;
+  SPEAK.forEach(i => { lines[li].push(i); if (T[i].str.includes('\n')) li = 1; });
+  const lineY = [H / 2 - 150, H / 2 + 110];
+  const widths = lines.map(L => L.reduce((a, i) => { ctx.font = `${size}px ${SERIF}`; return a + ctx.measureText(T[i].str.replace(/\n/g, '')).width + 14; }, -14));
+  let order = 0;
+  lines.forEach((L, l) => {
+    let x = (W - widths[l]) / 2;
+    L.forEach(i => {
+      const s = T[i].str.replace(/\n/g, '');
+      ctx.font = `${size}px ${SERIF}`;
+      const w = ctx.measureText(s).width;
+      const st = S0 + order * STEP;
+      const settle = seg(t, st + .55, st + .75);
+      if (t >= st) {
+        // flicker of illustrative candidates before settling
+        if (settle < 1) {
+          const k = Math.floor((t - st) / .11);
+          const alt = T[Math.floor(rnd(i * 13 + k, 7) * T.length)];
+          const altS = alt.str ? alt.str.replace(/\s/g, '') || '·' : '·';
+          ctx.textAlign = 'left'; ctx.font = `${size}px ${SERIF}`;
+          ctx.fillStyle = rgba(DIM, on * (1 - settle) * .55);
+          ctx.fillText([...altS].slice(0, 2).join(''), x, lineY[l]);
+        }
+        ctx.textAlign = 'left'; ctx.font = `${size}px ${SERIF}`;
+        ctx.fillStyle = rgba(INK, on * settle);
+        ctx.fillText(s, x, lineY[l]);
+        ctx.textAlign = 'center'; ctx.font = `20px ${MONO}`; ctx.fillStyle = rgba(DIM, on * settle);
+        ctx.fillText(String(T[i].id), x + w / 2, lineY[l] + size * .78);
+      }
+      x += w + 14; order++;
+    });
+  });
+  // cursor
+  const cur = clamp((t - S0) / STEP, 0, SPEAK.length);
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic';
+  ctx.font = `30px ${SANS}`; ctx.fillStyle = rgba(INK, on * .9); ctx.fillText('開口', GX, 150);
+  ctx.font = `22px ${MONO}`; ctx.fillStyle = rgba(DIM, on); ctx.textAlign = 'right';
+  ctx.fillText(`token ${Math.min(SPEAK.length, Math.floor(cur) + 1)} / 5,366`, GX + GW, 150);
+}
+
+function draw(t) {
+  if (!ROWS) { ROWS = Math.ceil(T.length / COLS); CW = GW / COLS; CH = GH / ROWS; }
+  ctx.fillStyle = BG; ctx.fillRect(0, 0, W, H);
+  stageRead(t);
+  stageSpeak(t);
+  // honesty footnote (always)
+  const f = seg(t, 2.0, 2.6) * (1 - seg(t, 42.5, 43.8));
+  ctx.textAlign = 'left'; ctx.textBaseline = 'alphabetic'; ctx.font = `19px ${SANS}`;
+  ctx.fillStyle = rgba(DIM, f * .9);
+  ctx.fillText('token 與 ID：o200k_base 實際切分　連線與候選字：示意', GX, 1830);
+}
+</script></body></html>
