@@ -1,0 +1,72 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#fff;overflow:hidden}canvas{display:block}</style></head>
+<body><canvas id="c" width="1080" height="1920"></canvas>
+<script>
+const W = 1080, H = 1920;
+const ctx = document.getElementById('c').getContext('2d');
+const SANS = '"Noto Sans CJK TC"', MONO = '"DejaVu Sans Mono"';
+let TOKS = [], RATE = 6, TOTAL = 0;
+function setData(d, rate) { TOKS = d; RATE = rate; TOTAL = d.length; }
+
+const X0 = 120, LH = 64, TOP = 260, BOTTOM = 1800;
+const VISIBLE = Math.floor((BOTTOM - TOP) / LH);
+
+function parts(t) {
+  // returns [{text, kind}] for the bracket content
+  if (t.str === null) return [{ text: '‹' + t.bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ') + '›', kind: 'frag' }];
+  const out = [];
+  for (const ch of t.str) {
+    if (ch === '\n') out.push({ text: '↵', kind: 'ws' });
+    else if (ch === ' ') out.push({ text: '␣', kind: 'ws' });
+    else out.push({ text: ch, kind: 'ink' });
+  }
+  return out;
+}
+
+function drawLine(t, y, a) {
+  let x = X0;
+  const ink = `rgba(17,17,17,${a})`, grey = `rgba(160,160,160,${a})`, idc = `rgba(110,110,110,${a})`;
+  ctx.textBaseline = 'alphabetic';
+  ctx.font = `44px ${SANS}`; ctx.fillStyle = ink; ctx.fillText('[', x, y); x += ctx.measureText('[').width;
+  for (const p of parts(t)) {
+    if (p.kind === 'frag') { ctx.font = `34px ${MONO}`; ctx.fillStyle = grey; }
+    else if (p.kind === 'ws') { ctx.font = `44px ${SANS}`; ctx.fillStyle = grey; }
+    else { ctx.font = `44px ${SANS}`; ctx.fillStyle = ink; }
+    ctx.fillText(p.text, x, y); x += ctx.measureText(p.text).width;
+  }
+  ctx.font = `44px ${SANS}`; ctx.fillStyle = ink; ctx.fillText(']', x, y); x += ctx.measureText(']').width + 18;
+  ctx.font = `34px ${MONO}`; ctx.fillStyle = idc; ctx.fillText(`(ID: ${t.id})`, x, y);
+}
+
+function draw(t) {
+  ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, W, H);
+  const pos = Math.max(0, t * RATE);          // continuous token position
+  const shown = Math.min(TOTAL, Math.floor(pos) + 1);
+  const frac = pos - Math.floor(pos);
+  // scroll: once the list is full, slide up continuously
+  const scroll = Math.max(0, pos - (VISIBLE - 1)) * LH;
+  ctx.save();
+  ctx.beginPath(); ctx.rect(0, TOP - LH, W, BOTTOM - TOP + LH); ctx.clip();
+  const first = Math.max(0, Math.floor(scroll / LH) - 1);
+  for (let i = first; i < shown; i++) {
+    const y = TOP + i * LH - scroll + 44;
+    if (y < TOP - LH || y > BOTTOM + LH) continue;
+    let a = 1;
+    if (i === shown - 1) a = Math.min(1, frac * 2.5);               // newest line fades in
+    if (scroll > 0) {                                                // soft fade at the top edge, only while scrolling
+      const fadeTop = (y - (TOP - LH + 20)) / (LH * 2.5);
+      a *= Math.max(0, Math.min(1, fadeTop));
+    }
+    if (a > 0.01) drawLine(TOKS[i], y, a);
+  }
+  ctx.restore();
+  // header & counter
+  ctx.fillStyle = '#111'; ctx.font = `30px ${MONO}`; ctx.textBaseline = 'alphabetic';
+  ctx.fillText('R E A D M E', X0, 150);
+  ctx.fillStyle = '#888'; ctx.font = `26px ${MONO}`;
+  const n = String(shown).padStart(4, ' ');
+  ctx.textAlign = 'right'; ctx.fillText(`token ${shown.toLocaleString()} / ${TOTAL.toLocaleString()}`, W - X0, 150); ctx.textAlign = 'left';
+  ctx.strokeStyle = '#ddd'; ctx.lineWidth = 2; ctx.beginPath(); ctx.moveTo(X0, 190); ctx.lineTo(W - X0, 190); ctx.stroke();
+  ctx.fillStyle = '#aaa'; ctx.font = `22px ${MONO}`; ctx.fillText('o200k_base', X0, 1850);
+}
+</script></body></html>
