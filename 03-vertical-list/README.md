@@ -13,7 +13,7 @@ python3 03-vertical-list/render_list.py video
 
 ## 影片
 
-放在 Release [`v03-vertical-list`](https://github.com/wufangci/readme-token-animation/releases/tag/v03-vertical-list)：
+由作者另外保存，檔名：
 
 - README_token_vertical.mp4
 

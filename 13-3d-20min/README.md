@@ -13,7 +13,7 @@ python3 13-3d-20min/render3d_full.py stills 40,470,850,1110
 
 ## 影片
 
-放在 Release [`v13-3d-20min`](https://github.com/wufangci/readme-token-animation/releases/tag/v13-3d-20min)：
+由作者另外保存，檔名：
 
 - README_nine_stages_3d_full_light.mp4（1080p，571 MB）
 - README_nine_stages_3d_full_preview720.mp4

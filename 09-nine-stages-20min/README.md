@@ -13,7 +13,7 @@ python3 09-nine-stages-20min/render_nine_full.py video
 
 ## 影片
 
-放在 Release [`v09-nine-stages-20min`](https://github.com/wufangci/readme-token-animation/releases/tag/v09-nine-stages-20min)：
+由作者另外保存，檔名：
 
 - README_nine_stages_full_light.mp4
 

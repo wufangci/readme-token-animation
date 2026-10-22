@@ -14,7 +14,7 @@ python3 14-image-patches/render_img.py video
 
 ## 影片
 
-放在 Release [`v14-image-patches`](https://github.com/wufangci/readme-token-animation/releases/tag/v14-image-patches)：
+由作者另外保存，檔名：
 
 - README_image_patches_3d_30s.mp4
 

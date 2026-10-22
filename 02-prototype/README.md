@@ -13,7 +13,7 @@ python3 02-prototype/render.py video
 
 ## 影片
 
-放在 Release [`v02-prototype`](https://github.com/wufangci/readme-token-animation/releases/tag/v02-prototype)：
+由作者另外保存，檔名：
 
 - README_token_prototype.mp4
 

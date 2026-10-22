@@ -13,7 +13,7 @@ python3 11-3d-v1/render3d.py video
 
 ## 影片
 
-放在 Release [`v11-3d-v1`](https://github.com/wufangci/readme-token-animation/releases/tag/v11-3d-v1)：
+由作者另外保存，檔名：
 
 - README_nine_stages_3d_60s.mp4
 

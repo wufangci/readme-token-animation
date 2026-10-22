@@ -13,7 +13,7 @@ python3 06-landscape/render_land.py video light 300
 
 ## 影片
 
-放在 Release [`v06-landscape`](https://github.com/wufangci/readme-token-animation/releases/tag/v06-landscape)：
+由作者另外保存，檔名：
 
 - README_token_land_light_300s.mp4
 

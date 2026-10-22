@@ -13,7 +13,7 @@ python3 08-nine-stages/render_nine2.py video light 60
 
 ## 影片
 
-放在 Release [`v08-nine-stages`](https://github.com/wufangci/readme-token-animation/releases/tag/v08-nine-stages)：
+由作者另外保存，檔名：
 
 - README_nine_stages_light_60s.mp4
 - README_nine_stages_v2_light_60s.mp4

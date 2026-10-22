@@ -4,7 +4,7 @@
 
 作品本體（信與 skill）在 [wufangci/README](https://github.com/wufangci/README)。這裡放的是把那封信拆成 token、再一步步視覺化成影像的過程：每個版本的程式、資料、截圖，以及每次修改背後的決定。
 
-- **影片**：放在 [Releases](https://github.com/wufangci/readme-token-animation/releases)，每個版本對應一個 tag。
+- **影片**：不放在 git 裡（檔案太大），由作者另外保存。每個版本資料夾的 `README.md` 列出了對應的影片檔名。
 - **過程**：整理在 [`DECISIONS.md`](DECISIONS.md)，記錄每一版的要求、回饋、決定和理由。
 
 ## 數字
@@ -20,22 +20,22 @@
 
 ## 版本
 
-| # | 資料夾 | 內容 | tag |
+| # | 資料夾 | 內容 | commit |
 |---|---|---|---|
-| 01 | `01-token-pdf` | 把信拆成 token 的 PDF（22 頁） | `v01-token-pdf` |
-| 02 | `02-prototype` | 第一個動態原型：字 → token → ID | `v02-prototype` |
-| 03 | `03-vertical-list` | 直式白底，token 與 ID 清單 | `v03-vertical-list` |
-| 04 | `04-prototype-vertical` | 第一版原型改成直式，黑白兩版 | `v04-prototype-vertical` |
-| 05 | `05-ai-reading` | 模擬 AI 讀信：逐 token 出現、注意力曲線；直式全文 15.5 分鐘 | `v05-ai-reading` |
-| 06 | `06-landscape` | 橫式 1920×1080，閃爍數字 → 變暗 → 曲線；5 分鐘試作 | `v06-landscape` |
-| 07 | `07-fine-lines` | 細線一條一條伸出來（30 秒、54 秒） | `v07-fine-lines` |
-| 08 | `08-nine-stages` | 九個階段，「不以人的方式思考」，1 分鐘 v1、v2 | `v08-nine-stages` |
-| 09 | `09-nine-stages-20min` | 九個階段 20 分鐘，跟著估計的朗讀速度 | `v09-nine-stages-20min` |
-| 10 | `10-live-voice` | 聲音即時互動：開口畫面就動、停下就停 | `v10-live-voice` |
-| 11 | `11-3d-v1` | 3D 第一版，1 分鐘 | `v11-3d-v1` |
-| 12 | `12-3d-v2-rule` | 3D 第二版：同一條規則套用九次，等速環繞 | `v12-3d-v2-rule` |
-| 13 | `13-3d-20min` | 3D 20 分鐘：每個階段的掃描佔滿整個階段 | `v13-3d-20min` |
-| 14 | `14-image-patches` | 圖片版：一張照片被切成 576 塊（CLIP ViT-L/14-336） | `v14-image-patches` |
+| 01 | `01-token-pdf` | 把信拆成 token 的 PDF（22 頁） | [`0d83990`](https://github.com/wufangci/readme-token-animation/tree/0d83990) |
+| 02 | `02-prototype` | 第一個動態原型：字 → token → ID | [`26463bc`](https://github.com/wufangci/readme-token-animation/tree/26463bc) |
+| 03 | `03-vertical-list` | 直式白底，token 與 ID 清單 | [`5b9d95c`](https://github.com/wufangci/readme-token-animation/tree/5b9d95c) |
+| 04 | `04-prototype-vertical` | 第一版原型改成直式，黑白兩版 | [`a48ee56`](https://github.com/wufangci/readme-token-animation/tree/a48ee56) |
+| 05 | `05-ai-reading` | 模擬 AI 讀信：逐 token 出現、注意力曲線；直式全文 15.5 分鐘 | [`9842f12`](https://github.com/wufangci/readme-token-animation/tree/9842f12) |
+| 06 | `06-landscape` | 橫式 1920×1080，閃爍數字 → 變暗 → 曲線；5 分鐘試作 | [`39e9ab8`](https://github.com/wufangci/readme-token-animation/tree/39e9ab8) |
+| 07 | `07-fine-lines` | 細線一條一條伸出來（30 秒、54 秒） | [`1831064`](https://github.com/wufangci/readme-token-animation/tree/1831064) |
+| 08 | `08-nine-stages` | 九個階段，「不以人的方式思考」，1 分鐘 v1、v2 | [`e9292c2`](https://github.com/wufangci/readme-token-animation/tree/e9292c2) |
+| 09 | `09-nine-stages-20min` | 九個階段 20 分鐘，跟著估計的朗讀速度 | [`67d0486`](https://github.com/wufangci/readme-token-animation/tree/67d0486) |
+| 10 | `10-live-voice` | 聲音即時互動：開口畫面就動、停下就停 | [`a0b160b`](https://github.com/wufangci/readme-token-animation/tree/a0b160b) |
+| 11 | `11-3d-v1` | 3D 第一版，1 分鐘 | [`ef0f9dd`](https://github.com/wufangci/readme-token-animation/tree/ef0f9dd) |
+| 12 | `12-3d-v2-rule` | 3D 第二版：同一條規則套用九次，等速環繞 | [`1e00f07`](https://github.com/wufangci/readme-token-animation/tree/1e00f07) |
+| 13 | `13-3d-20min` | 3D 20 分鐘：每個階段的掃描佔滿整個階段 | [`7e4e1ac`](https://github.com/wufangci/readme-token-animation/tree/7e4e1ac) |
+| 14 | `14-image-patches` | 圖片版：一張照片被切成 576 塊（CLIP ViT-L/14-336） | [`632c3fe`](https://github.com/wufangci/readme-token-animation/tree/632c3fe) |
 
 ## 重新產生
 

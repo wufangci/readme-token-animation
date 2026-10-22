@@ -13,7 +13,7 @@ python3 05-ai-reading/render_full.py video light   # 或 dark
 
 ## 影片
 
-放在 Release [`v05-ai-reading`](https://github.com/wufangci/readme-token-animation/releases/tag/v05-ai-reading)：
+由作者另外保存，檔名：
 
 - README_token_read_dark.mp4
 - README_token_read_light.mp4

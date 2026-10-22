@@ -13,7 +13,7 @@ python3 12-3d-v2-rule/render3d_v2.py video
 
 ## 影片
 
-放在 Release [`v12-3d-v2-rule`](https://github.com/wufangci/readme-token-animation/releases/tag/v12-3d-v2-rule)：
+由作者另外保存，檔名：
 
 - README_nine_stages_3d_v2_60s.mp4
 

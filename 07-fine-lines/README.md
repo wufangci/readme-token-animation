@@ -13,7 +13,7 @@ python3 07-fine-lines/render_fog.py video light 54
 
 ## 影片
 
-放在 Release [`v07-fine-lines`](https://github.com/wufangci/readme-token-animation/releases/tag/v07-fine-lines)：
+由作者另外保存，檔名：
 
 - README_token_fog_light_30s.mp4
 - README_token_fog_light_54s.mp4

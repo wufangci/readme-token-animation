@@ -13,7 +13,7 @@ python3 04-prototype-vertical/render_v.py video light
 
 ## 影片
 
-放在 Release [`v04-prototype-vertical`](https://github.com/wufangci/readme-token-animation/releases/tag/v04-prototype-vertical)：
+由作者另外保存，檔名：
 
 - README_token_prototype_vertical_dark.mp4
 - README_token_prototype_vertical_light.mp4
