@@ -1,0 +1,395 @@
+<!doctype html><html><head><meta charset="utf-8">
+<style>html,body{margin:0;background:#fff;overflow:hidden}canvas{display:block}#gl{position:absolute;left:-99999px}</style>
+<script src="../../node_modules/three/build/three.min.js"></script>
+</head><body>
+<canvas id="c" width="1920" height="1080"></canvas>
+<canvas id="gl" width="1920" height="1080"></canvas>
+<script>
+const W = 1920, H = 1080, END = 60, VOCAB = 199998;
+const MONO = '"DejaVu Sans Mono"', CJK = '"Noto Sans CJK TC"';
+// stage boundaries (seconds): stage k runs S[k-1]..S[k]
+const S = [0, 6, 12, 18, 24, 40, 45, 50, 55, 60];
+const clamp = (x, a, b) => Math.max(a, Math.min(b, x));
+const seg = (t, a, b) => clamp((t - a) / (b - a), 0, 1);
+const ease = x => x * x * (3 - 2 * x);
+const lerp = (a, b, f) => a + (b - a) * f;
+function rnd(i, k = 0) { let x = Math.sin(i * 127.1 + k * 311.7) * 43758.5453; return x - Math.floor(x); }
+function stageIndex(t) { for (let k = 1; k < S.length; k++) if (t < S[k]) return k; return 9; }
+
+let T, N, BYTES, LINKS;
+const out = document.getElementById('c'), octx = out.getContext('2d');
+const glc = document.getElementById('gl');
+const renderer = new THREE.WebGLRenderer({ canvas: glc, antialias: true, preserveDrawingBuffer: true, alpha: false });
+renderer.setPixelRatio(1); renderer.setSize(W, H, false); renderer.setClearColor(0xffffff, 1);
+const scene = new THREE.Scene();
+scene.fog = new THREE.Fog(0xffffff, 30, 95);
+const cam = new THREE.PerspectiveCamera(35, W / H, .1, 400);
+
+// ---------------- layout ----------------
+const GC = 74, GR = Math.ceil(5366 / 74), CW = .5, CH = .6;   // token grid on the floor
+const FX0 = -GC * CW / 2, FZ0 = -GR * CH / 2;
+function gridPos(i) { return [FX0 + (i % GC + .5) * CW, 0, -FZ0 - (Math.floor(i / GC) + .5) * CH]; }
+const BROW = 96;               // bytes per hex row
+let BROWS, BSTEP;
+
+// ---------------- text atlas ----------------
+function label(tok) {
+  if (tok.str === null) return tok.bytes.map(b => b.toString(16).toUpperCase().padStart(2, '0')).join(' ');
+  return tok.str.replace(/\n/g, '↵').replace(/ /g, '·');
+}
+function makeAtlas(keys, font, cw, ch, colorOf) {
+  const cols = Math.floor(4096 / cw), rows = Math.ceil(keys.length / cols);
+  const cv = document.createElement('canvas'); cv.width = 4096; cv.height = Math.min(4096, rows * ch);
+  const g = cv.getContext('2d');
+  g.fillStyle = '#fff'; g.fillRect(0, 0, cv.width, cv.height);
+  g.textAlign = 'center'; g.textBaseline = 'middle';
+  const map = new Map();
+  keys.forEach((k, n) => {
+    const x = (n % cols) * cw, y = Math.floor(n / cols) * ch;
+    let fs = parseInt(font); g.font = font;
+    while (g.measureText(k).width > cw - 8 && fs > 9) { fs--; g.font = font.replace(/^\d+/, fs); }
+    g.fillStyle = colorOf ? colorOf(k) : '#141414';
+    g.fillText(k, x + cw / 2, y + ch / 2 + 1);
+    map.set(k, [x / cv.width, 1 - (y + ch) / cv.height, cw / cv.width, ch / cv.height]);
+  });
+  const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 8; tex.minFilter = THREE.LinearMipmapLinearFilter;
+  return { tex, map };
+}
+
+// ---------------- shaders ----------------
+const chipMat = (tex) => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { map: { value: tex }, fogC: { value: new THREE.Color(0xffffff) }, fogN: { value: 30 }, fogF: { value: 95 } },
+  vertexShader: `
+    attribute vec3 off; attribute vec4 uvr; attribute float a; attribute float sc;
+    varying vec2 vUv; varying float vA; varying float vD;
+    void main(){
+      vUv = uvr.xy + uv * uvr.zw; vA = a;
+      vec3 p = vec3(position.x * sc, 0.0, -position.y * sc) + off;   // lie flat on the floor
+      vec4 mv = modelViewMatrix * vec4(p, 1.0); vD = -mv.z;
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform sampler2D map; uniform float fogN; uniform float fogF;
+    varying vec2 vUv; varying float vA; varying float vD;
+    void main(){
+      vec3 c = texture2D(map, vUv).rgb; float ink = 1.0 - c.r;
+      float f = 1.0 - smoothstep(fogN, fogF, vD);
+      float al = ink * vA * f; if (al < .01) discard;
+      gl_FragColor = vec4(c * 0.0 + vec3(.08), al);
+    }`
+});
+const ptMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { size: { value: 3.0 }, alpha: { value: 1 } },
+  vertexShader: `
+    attribute float a; uniform float size; varying float vA;
+    void main(){ vec4 mv = modelViewMatrix * vec4(position, 1.0); vA = a;
+      gl_PointSize = size * (28.0 / -mv.z); gl_Position = projectionMatrix * mv; }`,
+  fragmentShader: `
+    uniform float alpha; varying float vA;
+    void main(){ vec2 d = gl_PointCoord - .5; float r = length(d); if (r > .5) discard;
+      float al = smoothstep(.5, .3, r) * alpha * vA; if (al < .01) discard; gl_FragColor = vec4(vec3(.08), al); }`
+});
+const lineMat = (base) => new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { t: { value: 0 }, alpha: { value: base }, dur: { value: 1.1 } },
+  vertexShader: `
+    attribute float u; attribute float birth; uniform float t; uniform float dur; varying float vV; varying float vU;
+    void main(){ float pr = (t - birth) / dur; vV = pr - u; vU = u; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+  fragmentShader: `
+    uniform float alpha; varying float vV; varying float vU;
+    void main(){ if (vV < 0.0) discard; float tip = smoothstep(0.0, .08, vV); gl_FragColor = vec4(vec3(.08), alpha * (.35 + .65 * tip)); }`
+});
+const plainLine = (op) => new THREE.LineBasicMaterial({ color: 0x141414, transparent: true, opacity: op, depthWrite: false });
+
+// ---------------- objects ----------------
+let hexSheets = [], chips, idChips, colLines, cloud, CLOUD, GRIDP, arcs, ARCN, layers, terrain, TER, outChips, OUTSEQ, OUTPOS;
+const TR = 110, TC = 260, TW = 36, TD = 26;   // terrain rows/cols/size
+
+function embedPos(id, i) {
+  // illustrative: the same token id always lands on the same point; ids are scattered over a few loose clusters
+  const k = Math.floor(rnd(id, 1) * 11);
+  const th = rnd(k, 2) * Math.PI * 2, ph = Math.acos(2 * rnd(k, 3) - 1);
+  const R = 6.5;
+  const cx = R * Math.sin(ph) * Math.cos(th), cy = R * Math.cos(ph), cz = R * Math.sin(ph) * Math.sin(th);
+  const g = () => (rnd(id, 4) + rnd(id, 5) + rnd(id, 6) - 1.5) * 2.2;
+  const g2 = () => (rnd(id, 7) + rnd(id, 8) + rnd(id, 9) - 1.5) * 2.2;
+  const g3 = () => (rnd(id, 10) + rnd(id, 11) + rnd(id, 12) - 1.5) * 2.2;
+  const j = (rnd(i, 13) - .5) * .05;     // tiny jitter so identical tokens read as one dense spot
+  return [cx + g() + j, 9 + cy + g2() + j, cz + g3() + j];
+}
+
+function setData(d, links) {
+  T = d; N = T.length; LINKS = links;
+  BYTES = []; T.forEach(t => BYTES.push(...t.bytes));
+  BROWS = Math.ceil(BYTES.length / BROW); BSTEP = GC * CW * (32 / 4096);
+
+  // hex floor: 16 rows per texture strip
+  const per = 16;
+  for (let s = 0; s * per < BROWS; s++) {
+    const cv = document.createElement('canvas'); cv.width = 4096; cv.height = per * 32;
+    const g = cv.getContext('2d');
+    g.font = `22px ${MONO}`; g.fillStyle = '#141414'; g.textBaseline = 'middle';
+    for (let r = 0; r < per; r++) {
+      const row = s * per + r; if (row >= BROWS) break;
+      for (let b = 0; b < BROW; b++) {
+        const bi = row * BROW + b; if (bi >= BYTES.length) break;
+        g.fillText(BYTES[bi].toString(16).toUpperCase().padStart(2, '0'), 8 + b * 42.5, r * 32 + 16);
+      }
+    }
+    const tex = new THREE.CanvasTexture(cv); tex.anisotropy = 8;
+    const rows = Math.min(per, BROWS - s * per);
+    const mat = new THREE.MeshBasicMaterial({ map: tex, transparent: true, opacity: 0, depthWrite: false });
+    const m = new THREE.Mesh(new THREE.PlaneGeometry(GC * CW, per * BSTEP), mat);
+    m.rotation.x = -Math.PI / 2; m.position.set(0, .001, -FZ0 - (s * per + per / 2) * BSTEP);
+    m.userData = { row0: s * per, rows };
+    scene.add(m); hexSheets.push(m);
+  }
+
+  // token + id chips (instanced, flat on the floor)
+  const labels = [...new Set(T.map(label))];
+  const A1 = makeAtlas(labels, `34px ${CJK}`, 128, 64, k => /^[0-9A-F]{2}( [0-9A-F]{2})*$/.test(k) ? '#8a8a8a' : '#141414');
+  const ids = [...new Set(T.map(t => String(t.id)))];
+  const A2 = makeAtlas(ids, `30px ${MONO}`, 128, 64);
+  function chipMesh(A, key) {
+    const base = new THREE.PlaneGeometry(.48, .24);
+    const g = new THREE.InstancedBufferGeometry(); g.index = base.index;
+    g.setAttribute('position', base.attributes.position); g.setAttribute('uv', base.attributes.uv);
+    const off = new Float32Array(N * 3), uvr = new Float32Array(N * 4), a = new Float32Array(N), sc = new Float32Array(N);
+    for (let i = 0; i < N; i++) { const p = gridPos(i); off.set(p, i * 3); uvr.set(A.map.get(key(T[i])), i * 4); sc[i] = 1; }
+    g.setAttribute('off', new THREE.InstancedBufferAttribute(off, 3));
+    g.setAttribute('uvr', new THREE.InstancedBufferAttribute(uvr, 4));
+    g.setAttribute('a', new THREE.InstancedBufferAttribute(a, 1));
+    g.setAttribute('sc', new THREE.InstancedBufferAttribute(sc, 1));
+    g.instanceCount = N;
+    const m = new THREE.Mesh(g, chipMat(A.tex)); m.frustumCulled = false; scene.add(m); return m;
+  }
+  chips = chipMesh(A1, label);
+  idChips = chipMesh(A2, t => String(t.id));
+
+  // id columns: one fine vertical line per token
+  { const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 6), 3));
+    colLines = new THREE.LineSegments(g, plainLine(.0)); colLines.frustumCulled = false; scene.add(colLines); }
+
+  // embedding cloud
+  CLOUD = new Float32Array(N * 3); GRIDP = new Float32Array(N * 3);
+  for (let i = 0; i < N; i++) { CLOUD.set(embedPos(T[i].id, i), i * 3); GRIDP.set(gridPos(i), i * 3); }
+  { const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(N * 3), 3));
+    g.setAttribute('a', new THREE.BufferAttribute(new Float32Array(N).fill(1), 1));
+    cloud = new THREE.Points(g, ptMat.clone()); cloud.frustumCulled = false; scene.add(cloud); }
+
+  // attention arcs: causal (later token looks back at earlier); curated groups first, then repeats and near neighbours
+  const pairs = [];
+  for (const L of LINKS) for (const q of L.q) for (const tg of L.targets) for (const j of tg) if (j < q) pairs.push([q, j, 1]);
+  const byId = new Map(); T.forEach((t, i) => { if (!byId.has(t.id)) byId.set(t.id, []); byId.get(t.id).push(i); });
+  let s = 0;
+  while (pairs.length < 1600) {
+    s++;
+    const i = 20 + Math.floor(rnd(s, 21) * (N - 20));
+    let j;
+    const same = byId.get(T[i].id);
+    if (rnd(s, 22) < .35 && same.length > 1) { j = same[Math.floor(rnd(s, 23) * same.length)]; }
+    else if (rnd(s, 24) < .5) j = i - 1 - Math.floor(rnd(s, 25) * 40);
+    else j = Math.floor(rnd(s, 26) * i);
+    if (j < 0 || j >= i) continue;
+    if (T[i].str !== null && T[i].str.trim() === '' ) continue;
+    pairs.push([i, j, 0]);
+  }
+  ARCN = pairs.length;
+  const SEGN = 22, pos = new Float32Array(ARCN * SEGN * 2 * 3), uu = new Float32Array(ARCN * SEGN * 2), bb = new Float32Array(ARCN * SEGN * 2);
+  const C = new THREE.Vector3(0, 9, 0);
+  pairs.forEach(([i, j, cur], n) => {
+    const A = new THREE.Vector3(...CLOUD.slice(j * 3, j * 3 + 3)), B = new THREE.Vector3(...CLOUD.slice(i * 3, i * 3 + 3));
+    const M = A.clone().add(B).multiplyScalar(.5);
+    const outv = M.clone().sub(C); if (outv.length() < .01) outv.set(0, 1, 0);
+    outv.normalize().multiplyScalar(A.distanceTo(B) * (.35 + .3 * rnd(n, 30)) + .4);
+    const P = M.add(outv);
+    const birth = cur ? 24.6 + n * .09 : 25.5 + Math.pow(n / ARCN, 1.25) * 12.5;
+    const pt = u => { const a = (1 - u) * (1 - u), b = 2 * u * (1 - u), c = u * u; return [A.x * a + P.x * b + B.x * c, A.y * a + P.y * b + B.y * c, A.z * a + P.z * b + B.z * c]; };
+    for (let k = 0; k < SEGN; k++) {
+      const u0 = k / SEGN, u1 = (k + 1) / SEGN, o = (n * SEGN + k) * 2;
+      pos.set(pt(u0), o * 3); pos.set(pt(u1), o * 3 + 3);
+      uu[o] = u0; uu[o + 1] = u1; bb[o] = bb[o + 1] = birth;
+    }
+  });
+  { const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setAttribute('u', new THREE.BufferAttribute(uu, 1)); g.setAttribute('birth', new THREE.BufferAttribute(bb, 1));
+    arcs = new THREE.LineSegments(g, lineMat(.22)); arcs.frustumCulled = false; scene.add(arcs); }
+
+  // kv cache: 8 stacked sheets, each holding every token read so far
+  { const L = 8, g = new THREE.BufferGeometry(), p = new Float32Array(L * N * 3), a = new Float32Array(L * N);
+    const gw = 74, sp = .26;
+    for (let l = 0; l < L; l++) for (let i = 0; i < N; i++) {
+      const o = (l * N + i) * 3;
+      p[o] = (i % gw - gw / 2) * sp; p[o + 1] = 3 + l * 1.15; p[o + 2] = (Math.floor(i / gw) - 36) * sp;
+    }
+    g.setAttribute('position', new THREE.BufferAttribute(p, 3)); g.setAttribute('a', new THREE.BufferAttribute(a, 1));
+    layers = new THREE.Points(g, ptMat.clone()); layers.material.uniforms.size.value = 1.6; layers.frustumCulled = false; scene.add(layers); }
+
+  // probability terrain: the whole vocabulary laid out as rows of a fine line field
+  { TER = new Float32Array(TR * TC * 2 * 3);
+    const g = new THREE.BufferGeometry(); g.setAttribute('position', new THREE.BufferAttribute(TER, 3));
+    terrain = new THREE.LineSegments(g, plainLine(0)); terrain.frustumCulled = false; scene.add(terrain); }
+
+  // output: ids that rise from the peak and line up in the air
+  OUTSEQ = []; const o0 = N - 24; for (let k = o0; k < N; k++) OUTSEQ.push(k);
+  { const base = new THREE.PlaneGeometry(1.5, .75);
+    const g = new THREE.InstancedBufferGeometry(); g.index = base.index;
+    g.setAttribute('position', base.attributes.position); g.setAttribute('uv', base.attributes.uv);
+    const n = OUTSEQ.length, off = new Float32Array(n * 3), uvr = new Float32Array(n * 4), a = new Float32Array(n), sc = new Float32Array(n).fill(1);
+    OUTSEQ.forEach((k, q) => uvr.set(A2.map.get(String(T[k].id)), q * 4));
+    g.setAttribute('off', new THREE.InstancedBufferAttribute(off, 3)); g.setAttribute('uvr', new THREE.InstancedBufferAttribute(uvr, 4));
+    g.setAttribute('a', new THREE.InstancedBufferAttribute(a, 1)); g.setAttribute('sc', new THREE.InstancedBufferAttribute(sc, 1));
+    g.instanceCount = n;
+    const mat = chipMat(A2.tex);
+    // upright (facing camera along +z) instead of flat
+    mat.vertexShader = mat.vertexShader.replace('vec3(position.x * sc, 0.0, -position.y * sc)', 'vec3(position.x * sc, position.y * sc, 0.0)');
+    outChips = new THREE.Mesh(g, mat); outChips.frustumCulled = false; scene.add(outChips); }
+}
+
+// ---------------- camera path ----------------
+const KEYS = [
+  [0, [-15, 1.0, 25.5], [-10, 0, 19]],
+  [5, [-6, 5, 30], [0, 0, 12]],
+  [10, [0, 24, 34], [0, 0, 2]],
+  [15, [27, 15, 24], [0, 2, 0]],
+  [20, [26, 15, 14], [0, 7, 0]],
+  [25, [16, 12, 20], [0, 9, 0]],
+  [30, [-2, 10, 21], [0, 9, 0]],
+  [35, [-17, 11, 10], [0, 9, 0]],
+  [40, [-20, 10, 4], [0, 8, 0]],
+  [43, [-19, 6, 19], [0, 6.5, 0]],
+  [47, [0, 7, 25], [0, 3, 0]],
+  [52, [0, 8, 24], [0, 4.5, 0]],
+  [56, [0, 10, 28], [0, 5, 0]],
+  [60, [0, 14, 36], [0, 5, 0]],
+];
+const CP = new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(...k[1])), false, 'centripetal');
+const CT = new THREE.CatmullRomCurve3(KEYS.map(k => new THREE.Vector3(...k[2])), false, 'centripetal');
+function camAt(t) { let k = 0; while (k < KEYS.length - 2 && t >= KEYS[k + 1][0]) k++; const u = clamp((k + seg(t, KEYS[k][0], KEYS[k + 1][0])) / (KEYS.length - 1), 0, 1); cam.position.copy(CP.getPoint(u)); cam.lookAt(CT.getPoint(u)); }
+
+// ---------------- per-frame ----------------
+function draw(t) {
+  const si = stageIndex(t);
+  camAt(t);
+
+  // 1 bytes: rows of hex unroll along the floor with a flicker
+  const p1 = seg(t, .3, S[1] - .3);
+  const hexOut = 1 - seg(t, S[1] + 1.5, S[1] + 3.5);
+  for (const m of hexSheets) {
+    const r = m.userData.row0, rr = p1 * BROWS;
+    const vis = clamp((rr - r) / m.userData.rows, 0, 1);
+    const fl = vis > 0 && vis < 1 ? .55 + .45 * rnd(Math.floor(t * 24), r) : 1;
+    m.material.opacity = (vis > 0 ? fl : 0) * hexOut * .9;
+  }
+
+  // 2 tokens: chips appear in reading order, flickering, then sit
+  const p2 = seg(t, S[1] + .2, S[2] - .6), c2 = p2 * N;
+  const toId = seg(t, S[2] + .3, S[2] + 2.3);         // 3: words turn into numbers
+  const rise = ease(seg(t, S[2] + 1.5, S[3] - .5));   // 3: numbers lift on their columns
+  const fall = ease(seg(t, S[3] + .2, S[3] + 4.5));   // 4: columns go, numbers become points
+  const A = chips.geometry.attributes.a.array, Ai = idChips.geometry.attributes.a.array;
+  const O = chips.geometry.attributes.off.array, Oi = idChips.geometry.attributes.off.array;
+  const CL = colLines.geometry.attributes.position.array;
+  const Pc = cloud.geometry.attributes.position.array;
+  for (let i = 0; i < N; i++) {
+    const age = c2 - i;
+    let a = age <= 0 ? 0 : age < 60 ? (rnd(i, Math.floor(t * 20)) < .5 ? .25 : 1) : 1;
+    const gx = GRIDP[i * 3], gz = GRIDP[i * 3 + 2];
+    const h = rise * (.25 + T[i].id / VOCAB * 9);
+    A[i] = a * (1 - toId) * (1 - fall); Ai[i] = a * toId * (1 - fall);
+    O[i * 3] = Oi[i * 3] = gx; O[i * 3 + 1] = Oi[i * 3 + 1] = h + .002; O[i * 3 + 2] = Oi[i * 3 + 2] = gz;
+    CL[i * 6] = gx; CL[i * 6 + 1] = 0; CL[i * 6 + 2] = gz; CL[i * 6 + 3] = gx; CL[i * 6 + 4] = h * (1 - fall); CL[i * 6 + 5] = gz;
+    // point: from the top of its column to its place in the cloud (each leaves at its own moment)
+    const f = ease(clamp((fall * 1.6 - rnd(i, 40) * .6), 0, 1));
+    Pc[i * 3] = lerp(gx, CLOUD[i * 3], f); Pc[i * 3 + 1] = lerp(h, CLOUD[i * 3 + 1], f); Pc[i * 3 + 2] = lerp(gz, CLOUD[i * 3 + 2], f);
+  }
+  chips.geometry.attributes.a.needsUpdate = idChips.geometry.attributes.a.needsUpdate = true;
+  chips.geometry.attributes.off.needsUpdate = idChips.geometry.attributes.off.needsUpdate = true;
+  colLines.geometry.attributes.position.needsUpdate = true; cloud.geometry.attributes.position.needsUpdate = true;
+  colLines.material.opacity = .28 * seg(t, S[2] + 1.5, S[2] + 2.5) * (1 - fall);
+
+  // 4–6 cloud of points, then they flatten into the cache
+  const toCache = ease(seg(t, S[5] + .2, S[5] + 2.6));
+  const cloudA = seg(t, S[3] + .4, S[3] + 1.6) * (1 - toCache);
+  cloud.material.uniforms.alpha.value = cloudA * .85;
+  cloud.material.uniforms.size.value = 2.4;
+
+  // 5 attention arcs grow one by one
+  arcs.material.uniforms.t.value = t;
+  arcs.material.uniforms.alpha.value = .2 * (1 - seg(t, S[5] + .3, S[5] + 2.8));
+
+  // 6 cache sheets fill, bottom to top
+  const La = layers.geometry.attributes.a.array;
+  const lf = seg(t, S[5] + 1.2, S[6] - .4);
+  for (let l = 0; l < 8; l++) {
+    const on = clamp(lf * 8 - l, 0, 1);
+    for (let i = 0; i < N; i++) La[l * N + i] = (i / N) < on ? 1 : 0;
+  }
+  layers.geometry.attributes.a.needsUpdate = true;
+  layers.material.uniforms.alpha.value = .55 * seg(t, S[5] + 1, S[5] + 2) * (1 - seg(t, S[6] + .3, S[6] + 2.3));
+
+  // 7–8 probability field over the whole vocabulary; one peak, then the peak walks
+  const terA = seg(t, S[6] + .8, S[6] + 2.6) * (1 - seg(t, S[8] + 1, S[9] - 1));
+  terrain.material.opacity = .32 * terA;
+  let peakK = OUTSEQ[0];
+  const hop = .22, outStart = S[7] + .4;
+  const nOut = clamp(Math.floor((t - outStart) / hop), -1, OUTSEQ.length - 1);
+  if (nOut >= 0) peakK = OUTSEQ[nOut];
+  const pid = T[peakK].id, pr = Math.floor(pid / VOCAB * TR * TC / TC), pc = Math.floor(pid / VOCAB * TR * TC) % TC;
+  const peakH = 7.5 * ease(seg(t, S[6] + 1.8, S[6] + 3.6));
+  const hopF = nOut >= 0 ? seg(t - outStart - nOut * hop, 0, .12) : 1;
+  const flat = 1 - seg(t, S[8] + .5, S[9] - .5);
+  for (let r = 0; r < TR; r++) {
+    const z = -TD / 2 + r / (TR - 1) * TD;
+    for (let c = 0; c < TC - 1; c++) {
+      for (let e = 0; e < 2; e++) {
+        const cc = c + e, x = -TW / 2 + cc / (TC - 1) * TW;
+        const d2 = (r - pr) * (r - pr) * 1.0 + (cc - pc) * (cc - pc) * .35;
+        let y = .05 * rnd(r * TC + cc, 50) + peakH * hopF * Math.exp(-d2 / 2.2);
+        y += .9 * peakH / 7.5 * Math.exp(-((r - 31) ** 2 + (cc - 190) ** 2 * .35) / 3) * rnd(nOut + 3, 51);
+        y += .6 * peakH / 7.5 * Math.exp(-((r - 80) ** 2 + (cc - 60) ** 2 * .35) / 3) * rnd(nOut + 3, 52);
+        const o = ((r * (TC - 1) + c) * 2 + e) * 3;
+        TER[o] = x; TER[o + 1] = y * flat; TER[o + 2] = z;
+      }
+    }
+  }
+  terrain.geometry.attributes.position.needsUpdate = true;
+
+  // 8 output ids rise from the peak and settle in a row above the field
+  { const Ao = outChips.geometry.attributes.a.array, Oo = outChips.geometry.attributes.off.array;
+    for (let q = 0; q < OUTSEQ.length; q++) {
+      const k = OUTSEQ[q], id = T[k].id;
+      const qr = Math.floor(id / VOCAB * TR), qc = Math.floor(id / VOCAB * TR * TC) % TC;
+      const sx = -TW / 2 + qc / (TC - 1) * TW, sz = -TD / 2 + qr / (TR - 1) * TD;
+      const tx = -10.2 + (q % 12) * 1.85, ty = 8.6 - Math.floor(q / 12) * 1.0, tz = 2;
+      const f = ease(seg(t, outStart + q * hop, outStart + q * hop + 1.2));
+      Oo[q * 3] = lerp(sx, tx, f); Oo[q * 3 + 1] = lerp(7.8, ty, f); Oo[q * 3 + 2] = lerp(sz, tz, f);
+      Ao[q] = (t > outStart + q * hop ? 1 : 0) * (1 - seg(t, S[8] + .4, S[9] - 1.5));
+    }
+    outChips.geometry.attributes.a.needsUpdate = true; outChips.geometry.attributes.off.needsUpdate = true; }
+
+  renderer.render(scene, cam);
+
+  // composite + counters
+  octx.fillStyle = '#fff'; octx.fillRect(0, 0, W, H);
+  octx.drawImage(glc, 0, 0);
+  let s = '';
+  if (si === 1) s = `${Math.floor(p1 * BYTES.length).toLocaleString()} bytes`;
+  else if (si === 2 || si === 3) s = `${Math.floor(si === 2 ? c2 : N).toLocaleString()} tokens`;
+  else if (si === 4) s = `${N.toLocaleString()} × d`;
+  else if (si === 5) { let n = 0; const b = arcs.geometry.attributes.birth.array; for (let q = 0; q < ARCN; q++) if (t >= b[q * 44]) n++; s = `i → j  ${n.toLocaleString()}`; }
+  else if (si === 6) s = `cache ${Math.floor(lf * N * 8).toLocaleString()}`;
+  else if (si === 7) s = `p( · )  ${VOCAB.toLocaleString()}`;
+  else if (si === 8) s = `output ${Math.max(0, nOut + 1)}`;
+  else s = 'Δ weights = 0';
+  const a = seg(t, .3, 1.2) * (1 - seg(t, END - 2, END - .5));
+  octx.font = `20px ${MONO}`; octx.fillStyle = `rgba(150,150,150,${a})`; octx.textBaseline = 'alphabetic';
+  octx.textAlign = 'right'; octx.fillText(s, W - 80, 70);
+  octx.textAlign = 'left'; octx.fillText(String(si).padStart(2, '0'), 80, 70);
+}
+</script>
+</body></html>
