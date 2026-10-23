@@ -36,6 +36,18 @@
 
 ## 下一步（依優先順序）
 
+### 來自錄像（readme-video 決策 07，2026-10-23）
+
+動畫成為錄像第三章「打開我」的一部分，見 [readme-video 決策 07](https://github.com/wufangci/readme-video/blob/main/06_process/DECISIONS.md)、[第三章說明](https://github.com/wufangci/readme-video/blob/main/04_active/03-inside-ai/README.md)。
+
+- [ ] **A 段約 2 分鐘**：把 13（20 分鐘）壓成九個階段的 2 分鐘版，白底。**11/1 demo 前要有。**
+- [ ] **B 段並排回顧約 30 秒**：信的 token、14 圖片切割的臉（第一章被切成 576 塊）、第二章跳出信的畫面，放在同一個 3D 空間 → 第九階段「遺忘」（Δweights = 0）全部靜止。demo 可先做簡版。
+- [ ] **C 段朗讀約 5 分鐘**：token 只在作者說話時變形，聲音停下畫面就停。demo 用 10 聲音互動邊唸邊螢幕錄影；正式版改吃錄好的音檔。
+- [ ] **誠實標示**：畫面角落「分詞示意：GPT-4o（o200k_base）」。分詞器只是示意，不指稱特定 AI。
+- [ ] （待授權）A 段第 5–7 階段旁浮出 [LLM Visualization](https://bbycroft.net/llm) 小窗。
+
+### 原本的下一步
+
 1. 調整 3D 動畫，直到滿意（13 為主，12 用來快速試驗）。
 2. 錄製朗讀，產生真實時間表，取代 `02_timeline/timing.json` 的估計值。
 3. 實測 10 聲音互動。
